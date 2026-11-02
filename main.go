@@ -40,6 +40,8 @@ type Config struct {
 	// IdleDays moves files nobody opened or modified for this long off the disk even
 	// when there is room. 0 turns it off.
 	IdleDays int `json:"idleDays"`
+	// UIAddr is where serve shows its dashboard; empty turns it off.
+	UIAddr string `json:"uiAddr"`
 
 	// KeyIsOffMachine enables automatic eviction. Set it only after copying the key.
 	KeyIsOffMachine bool  `json:"keyIsOffMachine"`
@@ -54,7 +56,7 @@ const gib = int64(1) << 30
 
 func loadConfig(path string) (Config, error) {
 	cfg := Config{
-		MaxBatchBytes: 256 << 20, MaxBatchFiles: 2000, MinFreeBytes: 2 * gib, MaxFlushBytes: 200 * gib, PrivateBudget: 4 * gib, ViewBytes: 4e12, KeepFreeBytes: 20 * gib, ReadCacheBytes: 2 * gib, IdleDays: 14,
+		MaxBatchBytes: 256 << 20, MaxBatchFiles: 2000, MinFreeBytes: 2 * gib, MaxFlushBytes: 200 * gib, PrivateBudget: 4 * gib, ViewBytes: 4e12, KeepFreeBytes: 20 * gib, ReadCacheBytes: 2 * gib, IdleDays: 14, UIAddr: "127.0.0.1:7650",
 		Roots:     []string{"/"},
 		Exclude:   []string{"/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "/var/cache", "/lost+found", "/swapfile", "/swap.img", "/root/.cache/huggingface/xet"},
 		Sensitive: defaultSensitive,

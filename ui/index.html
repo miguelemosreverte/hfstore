@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hfstore</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+  --muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+  --track: #cde2fb; --good: #0ca30c; --warning: #fab219; --critical: #d03b3b; --good-text: #006300;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --track: #184f95; --good-text: #0ca30c;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface-1: #1a1a19; --text-primary: #f0efec; --text-secondary: #c3c2b7;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --track: #184f95; --good-text: #0ca30c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text-primary);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 24px 20px 48px; }
+header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+header h1 { font-size: 18px; font-weight: 600; margin: 0; }
+header .host { color: var(--text-secondary); }
+header .spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--surface-1); color: var(--text-secondary); padding: 6px 12px; font: inherit; cursor: pointer; }
+.seg button[aria-pressed="true"] { color: var(--text-primary); font-weight: 600; background: var(--grid); }
+.ghost { border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary); border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer; }
+.updated { color: var(--muted); font-size: 12px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+.top { display: grid; grid-template-columns: minmax(280px, 1.3fr) 3fr; gap: 16px; margin-bottom: 16px; }
+.hero .label, .tile .label { color: var(--text-secondary); font-size: 13px; }
+.hero .value { font-size: 52px; font-weight: 600; line-height: 1.1; margin: 6px 0 10px; }
+.hero .value small { font-size: 20px; font-weight: 500; color: var(--text-secondary); }
+.meter { position: relative; height: 10px; border-radius: 5px; background: var(--track); }
+.meter .fill { position: absolute; inset: 0 auto 0 0; border-radius: 5px; background: var(--series-1); }
+.meter .mark { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--text-primary); }
+.hero .note { margin-top: 10px; color: var(--text-secondary); font-size: 13px; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+.status i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 980px) { .tiles { grid-template-columns: repeat(2, 1fr); } }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 4px; }
+.tile .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(520px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.chart h2 { font-size: 15px; font-weight: 600; margin: 0; }
+.chart .sub { color: var(--text-secondary); font-size: 13px; margin: 2px 0 10px; }
+.chart .head { display: flex; align-items: flex-start; gap: 8px; }
+.chart .head > div { flex: 1; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+.legend i.box { height: 10px; width: 10px; border-radius: 2px; }
+svg { display: block; width: 100%; overflow: visible; }
+svg text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+svg .label { fill: var(--text-secondary); font-size: 12px; }
+svg .grid line { stroke: var(--grid); stroke-width: 1; }
+svg .base { stroke: var(--axis); stroke-width: 1; }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface-1); color: var(--text-primary);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  display: none; min-width: 140px; }
+.tip .t { color: var(--text-secondary); margin-bottom: 4px; }
+.tip .row { display: flex; align-items: center; gap: 6px; justify-content: space-between; }
+.tip .row span:first-child { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+.tip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th { text-align: left; font-weight: 500; color: var(--text-secondary); border-bottom: 1px solid var(--grid); padding: 6px 8px; }
+td { border-bottom: 1px solid var(--grid); padding: 6px 8px; }
+td.num, th.num { text-align: right; }
+td.num, td.nowrap { white-space: nowrap; }
+td.path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; }
+.bar { height: 8px; border-radius: 0 4px 4px 0; background: var(--series-1); }
+.tablewrap { max-height: 280px; overflow: auto; }
+@media (max-width: 720px) { .top { grid-template-columns: 1fr; } .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>hfstore</h1><span class="host" id="host"></span>
+    <span class="spacer"></span>
+    <span class="updated" id="updated"></span>
+    <div class="seg" id="range" role="group" aria-label="Time range">
+      <button data-r="1h">1 hour</button><button data-r="6h">6 hours</button><button data-r="24h" aria-pressed="true">24 hours</button><button data-r="7d">7 days</button>
+    </div>
+    <button class="ghost" id="theme" title="Switch light and dark">Theme</button>
+  </header>
+
+  <section class="top">
+    <div class="card hero">
+      <div class="label">Disk free</div>
+      <div class="value" id="free">–</div>
+      <div class="meter" aria-hidden="true"><div class="fill" id="freeFill"></div><div class="mark" id="freeMark"></div></div>
+      <div class="note" id="freeNote"></div>
+    </div>
+    <div class="tiles">
+      <div class="card tile"><div class="label">Protected on Hugging Face</div><div class="value" id="tProtected">–</div><div class="sub" id="tProtectedSub"></div></div>
+      <div class="card tile"><div class="label">Moved off the disk</div><div class="value" id="tMoved">–</div><div class="sub" id="tMovedSub"></div></div>
+      <div class="card tile"><div class="label">Reads from cache</div><div class="value" id="tHits">–</div><div class="sub" id="tHitsSub"></div></div>
+      <div class="card tile"><div class="label">Read-ahead used</div><div class="value" id="tAhead">–</div><div class="sub" id="tAheadSub"></div></div>
+      <div class="card tile"><div class="label">Read cache</div><div class="value" id="tCache">–</div><div class="sub" id="tCacheSub"></div></div>
+      <div class="card tile"><div class="label">Last backup</div><div class="value" id="tBackup">–</div><div class="sub" id="tBackupSub"></div></div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card chart" id="cFree"></div>
+    <div class="card chart" id="cSpeed"></div>
+    <div class="card chart" id="cReads"></div>
+    <div class="card chart" id="cWait"></div>
+    <div class="card chart" id="cFreed"></div>
+    <div class="card chart" id="cUploads"></div>
+  </section>
+  <section class="grid">
+    <div class="card chart" id="cMounts"></div>
+    <div class="card chart" id="cHot"></div>
+  </section>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const NS = "http://www.w3.org/2000/svg";
+let range = localStorage.getItem("hfstore-range") || "24h";
+
+function bytes(n, digits) {
+  if (n == null) return "–";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0; let v = Math.abs(n);
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; } // binary, as df shows
+  const d = digits ?? (v >= 100 || i === 0 ? 0 : 1);
+  return (n < 0 ? "-" : "") + v.toFixed(d) + " " + units[i];
+}
+function compact(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K";
+  return String(Math.round(n * 10) / 10);
+}
+// The same, in the binary unit the axis will show, so byte ticks are round too.
+function niceBytes(v) { let u = 1; while (v / u >= 1024) u *= 1024; return niceMax(v / u) * u; }
+function pct(a, b) { return b > 0 ? Math.round(100 * a / b) + "%" : "–"; }
+function ago(unix) {
+  const s = Math.max(0, Date.now() / 1000 - unix);
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + " min ago";
+  if (s < 129600) return Math.round(s / 3600) + " h ago";
+  return Math.round(s / 86400) + " days ago";
+}
+function clock(unix, withDay) {
+  const d = new Date(unix * 1000);
+  const t = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return withDay ? d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + t : t;
+}
+function el(tag, attrs, parent) {
+  const node = document.createElementNS(NS, tag);
+  for (const k in attrs) node.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(node);
+  return node;
+}
+// Axis top: four equal steps of 1, 2 or 5 x 10^n, so every tick is a round number.
+function niceMax(v) {
+  if (v <= 0) return 4;
+  const raw = v / 4, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 5, 10]) if (m * p >= raw) return 4 * m * p;
+  return 40 * p;
+}
+
+// tooltip
+const tip = $("tip");
+function showTip(e, title, rows) {
+  tip.innerHTML = `<div class="t">${title}</div>` + rows.map(r =>
+    `<div class="row"><span>${r.color ? `<i style="background:${r.color}"></i>` : ""}${r.name}</span><b>${r.value}</b></div>`).join("");
+  tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = e.clientX + 14, y = e.clientY + 14;
+  if (x + w > innerWidth - 8) x = e.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = e.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+
+// A chart card: title, subtitle, legend, the plot, and a table view behind a toggle.
+function card(id, title, sub, legend, table) {
+  const root = $(id);
+  const open = root.dataset.table === "1";
+  root.innerHTML = `<div class="head"><div><h2>${title}</h2><div class="sub">${sub}</div></div>
+    <button class="ghost" data-act="table">${open ? "Chart" : "Table"}</button></div>`;
+  root.querySelector("[data-act=table]").onclick = () => { root.dataset.table = open ? "0" : "1"; draw(); };
+  if (open) {
+    const wrap = document.createElement("div"); wrap.className = "tablewrap";
+    wrap.innerHTML = `<table><thead><tr>${table.head.map((h, i) => `<th class="${i ? "num" : ""}">${h}</th>`).join("")}</tr></thead>
+      <tbody>${table.rows.map(r => `<tr>${r.map((c, i) => `<td class="${i ? "num" : ""}">${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    root.appendChild(wrap);
+    return null;
+  }
+  if (legend && legend.length > 1) {
+    const lg = document.createElement("div"); lg.className = "legend";
+    lg.innerHTML = legend.map(s => `<span><i class="${s.box ? "box" : ""}" style="background:${css(s.color)}"></i>${s.name}</span>`).join("");
+    root.appendChild(lg);
+  }
+  return root;
+}
+
+// Line chart over time: one y-axis, 2px lines, crosshair with every series in the tooltip.
+function lineChart(id, title, sub, times, series, fmt, opts = {}) {
+  const table = { head: ["Time", ...series.map(s => s.name)],
+    rows: times.map((t, i) => [clock(t, range === "7d"), ...series.map(s => fmt(s.values[i]))]).reverse() };
+  const root = card(id, title, sub, series, table);
+  if (!root) return;
+  if (times.length < 2) { root.insertAdjacentHTML("beforeend", `<div class="empty">Collecting data: the first points appear within a few minutes.</div>`); return; }
+  const W = root.clientWidth - 36, H = 200, L = 52, R = 16, T = 10, B = 24;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": title });
+  root.appendChild(svg);
+  const all = series.flatMap(s => s.values).concat(opts.ref ? [opts.ref.value] : []);
+  const ymax = (opts.bytes ? niceBytes : niceMax)(Math.max(...all, 0) * 1.08);
+  const t0 = times[0], t1 = times[times.length - 1];
+  const x = t => L + (W - L - R) * (t - t0) / Math.max(1, t1 - t0);
+  const y = v => T + (H - T - B) * (1 - v / ymax);
+  const g = el("g", { class: "grid" }, svg);
+  for (let i = 0; i <= 4; i++) {
+    const v = ymax * i / 4;
+    el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }, g);
+    const tx = el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, svg); tx.textContent = fmt(v, true);
+  }
+  el("line", { class: "base", x1: L, x2: W - R, y1: y(0), y2: y(0) }, svg);
+  const ticks = 5;
+  for (let i = 0; i <= ticks; i++) {
+    const t = t0 + (t1 - t0) * i / ticks;
+    const tx = el("text", { x: x(t), y: H - 6, "text-anchor": i === 0 ? "start" : i === ticks ? "end" : "middle" }, svg);
+    tx.textContent = clock(t, range === "7d");
+  }
+  if (opts.ref) {
+    el("line", { x1: L, x2: W - R, y1: y(opts.ref.value), y2: y(opts.ref.value), stroke: css("--text-secondary"), "stroke-width": 1 }, svg);
+    const lastV = series[0].values[series[0].values.length - 1];
+    const below = lastV >= opts.ref.value;
+    const tx = el("text", { class: "label", x: W - R - 8, y: y(opts.ref.value) + (below ? 15 : -6), "text-anchor": "end" }, svg); tx.textContent = opts.ref.label;
+  }
+  for (const s of series) {
+    const color = css(s.color);
+    const d = s.values.map((v, i) => `${i ? "L" : "M"}${x(times[i]).toFixed(1)},${y(v).toFixed(1)}`).join("");
+    if (series.length === 1) el("path", { d: d + `L${x(t1)},${y(0)}L${x(t0)},${y(0)}Z`, fill: color, "fill-opacity": 0.1 }, svg);
+    el("path", { d, fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, svg);
+    const last = s.values.length - 1;
+    el("circle", { cx: x(times[last]), cy: y(s.values[last]), r: 4, fill: color, stroke: css("--surface-1"), "stroke-width": 2 }, svg);
+  }
+  const cross = el("line", { y1: T, y2: H - B, stroke: css("--axis"), "stroke-width": 1, visibility: "hidden" }, svg);
+  const dots = series.map(s => el("circle", { r: 4, fill: css(s.color), stroke: css("--surface-1"), "stroke-width": 2, visibility: "hidden" }, svg));
+  const hit = el("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent" }, svg);
+  hit.addEventListener("mousemove", e => {
+    const box = svg.getBoundingClientRect();
+    const px = (e.clientX - box.left) * W / box.width;
+    let i = 0, best = Infinity;
+    times.forEach((t, j) => { const dd = Math.abs(x(t) - px); if (dd < best) { best = dd; i = j; } });
+    cross.setAttribute("x1", x(times[i])); cross.setAttribute("x2", x(times[i])); cross.setAttribute("visibility", "visible");
+    series.forEach((s, k) => { dots[k].setAttribute("cx", x(times[i])); dots[k].setAttribute("cy", y(s.values[i])); dots[k].setAttribute("visibility", "visible"); });
+    showTip(e, clock(times[i], true), series.map(s => ({ name: s.name, color: css(s.color), value: fmt(s.values[i]) })));
+  });
+  hit.addEventListener("mouseleave", () => { hideTip(); cross.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); });
+}
+
+// Columns: one baseline, <=24px wide, 4px rounded top, 2px surface gap between stacked segments.
+function columnChart(id, title, sub, labels, series, fmt, tipTitle, opts = {}) {
+  const table = { head: ["", ...series.map(s => s.name)], rows: labels.map((l, i) => [l, ...series.map(s => fmt(s.values[i]))]).reverse() };
+  const root = card(id, title, sub, series.map(s => ({ ...s, box: true })), table);
+  if (!root) return;
+  if (!labels.length || series.every(s => s.values.every(v => !v))) {
+    root.insertAdjacentHTML("beforeend", `<div class="empty">${opts.empty || "Nothing yet."}</div>`); return;
+  }
+  const W = root.clientWidth - 36, H = 200, L = 52, R = 16, T = 10, B = 24;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": title });
+  root.appendChild(svg);
+  const totals = labels.map((_, i) => series.reduce((a, s) => a + s.values[i], 0));
+  const ymax = (opts.bytes ? niceBytes : niceMax)(Math.max(...totals, 0) * 1.08);
+  const y = v => T + (H - T - B) * (1 - v / ymax);
+  const g = el("g", { class: "grid" }, svg);
+  for (let i = 0; i <= 4; i++) {
+    const v = ymax * i / 4;
+    el("line", { x1: L, x2: W - R, y1: y(v), y2: y(v) }, g);
+    const tx = el("text", { x: L - 8, y: y(v) + 4, "text-anchor": "end" }, svg); tx.textContent = fmt(v, true);
+  }
+  const slot = (W - L - R) / labels.length, bw = Math.min(24, slot * 0.6);
+  const every = Math.ceil(labels.length / 8);
+  labels.forEach((label, i) => {
+    const cx = L + slot * (i + 0.5);
+    let base = 0;
+    const visible = series.map((s, k) => k).filter(k => series[k].values[i] > 0);
+    visible.forEach((k, n) => {
+      const v = series[k].values[i];
+      const top = n === visible.length - 1;
+      const y0 = y(base) - (n ? 2 : 0), y1 = y(base + v);
+      const h = Math.max(0, y0 - y1);
+      if (h > 0) {
+        const r = top ? Math.min(4, h, bw / 2) : 0;
+        const x0 = cx - bw / 2, x1 = cx + bw / 2;
+        el("path", { d: `M${x0},${y0}L${x0},${y1 + r}Q${x0},${y1} ${x0 + r},${y1}L${x1 - r},${y1}Q${x1},${y1} ${x1},${y1 + r}L${x1},${y0}Z`, fill: css(series[k].color) }, svg);
+      }
+      base += v;
+    });
+    if (i % every === 0) { const tx = el("text", { x: cx, y: H - 6, "text-anchor": "middle" }, svg); tx.textContent = label; }
+    const hit = el("rect", { x: cx - slot / 2, y: T, width: slot, height: H - T - B, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", e => showTip(e, tipTitle ? tipTitle(i) : label, series.map(s => ({ name: s.name, color: css(s.color), value: fmt(s.values[i]) }))));
+    hit.addEventListener("mouseleave", hideTip);
+  });
+  el("line", { class: "base", x1: L, x2: W - R, y1: y(0), y2: y(0) }, svg);
+}
+
+// Horizontal stacked bars per mount: on disk, then on Hugging Face, total at the bar end.
+function mountChart(id, mounts, at) {
+  const series = [{ name: "On disk", color: "--series-1", box: true }, { name: "On Hugging Face only", color: "--series-2", box: true }];
+  const table = { head: ["Folder", "On disk", "Files on disk", "On Hugging Face only", "Files moved"],
+    rows: mounts.map(m => [m.path, bytes(m.localBytes), compact(m.localFiles), bytes(m.remoteBytes), compact(m.remoteFiles)]) };
+  const root = card(id, "Where each folder's data is", at ? `Measured ${ago(at)}, every 15 minutes` : "Measuring…", series, table);
+  if (!root) return;
+  if (!mounts || !mounts.length) { root.insertAdjacentHTML("beforeend", `<div class="empty">The first measurement takes a minute.</div>`); return; }
+  const W = root.clientWidth - 36, row = 44, H = mounts.length * row + 4, L = 0, R = 80;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img", "aria-label": "Where each folder's data is" });
+  root.appendChild(svg);
+  const xmax = Math.max(...mounts.map(m => m.localBytes + m.remoteBytes), 1);
+  const x = v => (W - L - R) * v / xmax;
+  mounts.forEach((m, i) => {
+    const top = i * row;
+    const name = el("text", { class: "label", x: 0, y: top + 13 }, svg); name.textContent = m.path;
+    const by = top + 20, bh = 14;
+    const a = x(m.localBytes), b = x(m.remoteBytes);
+    if (a > 0) el("rect", { x: L, y: by, width: Math.max(1, a - (b > 0 ? 2 : 0)), height: bh, rx: b > 0 ? 0 : 4, fill: css("--series-1") }, svg);
+    if (b > 0) el("path", { d: `M${L + a},${by}L${L + a + b - 4},${by}Q${L + a + b},${by} ${L + a + b},${by + 4}L${L + a + b},${by + bh - 4}Q${L + a + b},${by + bh} ${L + a + b - 4},${by + bh}L${L + a},${by + bh}Z`, fill: css("--series-2") }, svg);
+    const tot = el("text", { class: "label", x: L + a + b + 8, y: by + 11 }, svg); tot.textContent = bytes(m.localBytes + m.remoteBytes);
+    const hit = el("rect", { x: 0, y: top, width: W, height: row, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", e => showTip(e, m.path, [
+      { name: "On disk", color: css("--series-1"), value: `${bytes(m.localBytes)} · ${compact(m.localFiles)} files` },
+      { name: "On Hugging Face only", color: css("--series-2"), value: `${bytes(m.remoteBytes)} · ${compact(m.remoteFiles)} files` }]));
+    hit.addEventListener("mouseleave", hideTip);
+  });
+}
+
+function esc(t) { return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;"); }
+function shortPath(p) { const parts = p.split("/"); return parts.length > 4 ? "…/" + parts.slice(-3).join("/") : p; }
+function hotTable(id, hot, tracking) {
+  const root = $(id);
+  const since = tracking ? `Tracking since ${new Date(tracking.since * 1000).toLocaleDateString()} · ${compact(tracking.files)} files seen` : "";
+  root.innerHTML = `<div class="head"><div><h2>Most used files</h2><div class="sub">Score: uses per hour, halving every week. ${since}</div></div></div>`;
+  if (!hot || !hot.length) { root.insertAdjacentHTML("beforeend", `<div class="empty">No opens recorded yet.</div>`); return; }
+  const top = hot[0].score || 1;
+  const wrap = document.createElement("div"); wrap.className = "tablewrap";
+  wrap.innerHTML = `<table><thead><tr><th>File</th><th class="num">Score</th><th style="width:90px"></th><th class="num">Size</th><th>Where</th><th class="num">Last used</th></tr></thead><tbody>${
+    hot.map(h => `<tr><td class="path" title="${esc(h.path)}">${esc(shortPath(h.path))}</td><td class="num">${h.score.toFixed(1)}</td>
+      <td><div class="bar" style="width:${Math.max(4, 90 * h.score / top)}px"></div></td><td class="num">${bytes(h.size)}</td>
+      <td class="nowrap">${h.local ? "On disk" : "Hugging Face"}</td><td class="num">${ago(h.last)}</td></tr>`).join("")}</tbody></table>`;
+  root.appendChild(wrap);
+}
+
+let summary = null, samples = [];
+function draw() {
+  if (!summary) return;
+  const s = summary, disk = s.disk;
+  $("host").textContent = s.host;
+  $("updated").textContent = "Updated " + clock(s.now);
+  // hero
+  $("free").innerHTML = `${bytes(disk.free, 1).replace(/ (\w+)$/, " <small>$1</small>")}`;
+  $("freeFill").style.width = (100 * disk.free / disk.total).toFixed(1) + "%";
+  $("freeMark").style.left = (100 * disk.keepFree / disk.total).toFixed(1) + "%";
+  const ok = disk.free >= disk.keepFree;
+  $("freeNote").innerHTML = `of ${bytes(disk.total)} · minimum kept free ${bytes(disk.keepFree)}<br>
+    <span class="status"><i style="background:${ok ? css("--good") : css("--warning")}"></i>${ok ? "Above the minimum" : "Below the minimum: moving files off the disk"}</span>`;
+  // tiles
+  const tiers = s.index.tiers;
+  $("tProtected").textContent = bytes(tiers.public + tiers.vault + tiers.private);
+  $("tProtectedSub").textContent = `${compact(s.index.objects)} files · ${bytes(tiers.vault)} encrypted credentials`;
+  const remote = (s.mounts || []).reduce((a, m) => a + m.remoteBytes, 0), local = (s.mounts || []).reduce((a, m) => a + m.localBytes, 0);
+  $("tMoved").textContent = s.mounts ? bytes(remote) : "–";
+  $("tMovedSub").textContent = s.mounts ? `${bytes(local)} of the mounted folders stays on disk` : "measuring";
+  const w = s.week;
+  $("tHits").textContent = pct(w.cacheHits, w.cacheHits + w.coldReads);
+  $("tHitsSub").textContent = `of reads of moved files, last 7 days · ${compact(w.coldReads)} downloads`;
+  $("tAhead").textContent = pct(w.preUsed, w.preFiles);
+  $("tAheadSub").textContent = `${compact(w.preFiles)} files fetched ahead, ${compact(w.preUsed)} read`;
+  $("tCache").textContent = bytes(s.cache.bytes);
+  $("tCacheSub").textContent = `of ${bytes(s.cache.limit)}: copies of moved files being read`;
+  const last = s.index.lastBackup ? Date.parse(s.index.lastBackup) / 1000 : 0;
+  $("tBackup").textContent = last ? ago(last) : "never";
+  const fresh = last && s.now - last < 36 * 3600;
+  $("tBackupSub").innerHTML = `<span class="status"><i style="background:${fresh ? css("--good") : css("--critical")}"></i>${fresh ? "Daily backup on time" : "No backup in 36 hours"}</span>`;
+
+  // time series
+  const t = samples.map(x => x.t);
+  const step = t.length > 1 ? t[1] - t[0] : 60;
+  const per = { "1h": "per minute", "6h": "per 5 minutes", "24h": "per 15 minutes", "7d": "per hour" }[range];
+  lineChart("cFree", "Disk free", "The line marks the minimum kept free", t, [{ name: "Free", color: "--series-1", values: samples.map(x => x.free) }],
+    (v, axis) => bytes(v, axis ? 0 : 1), { bytes: true, ref: { value: disk.keepFree, label: "minimum " + bytes(disk.keepFree) } });
+  lineChart("cSpeed", "Download speed", "Average over each interval", t, [
+    { name: "For readers", color: "--series-1", values: samples.map(x => x.coldBytes / step) },
+    { name: "Read-ahead", color: "--series-2", values: samples.map(x => x.preBytes / step) }], v => bytes(v) + "/s", { bytes: true });
+  lineChart("cReads", "File reads", `Opens through the mounts, ${per}`, t, [
+    { name: "On disk", color: "--series-1", values: samples.map(x => x.opens) },
+    { name: "From cache", color: "--series-2", values: samples.map(x => x.cacheHits) },
+    { name: "Downloaded", color: "--series-3", values: samples.map(x => x.coldReads) }], v => compact(v));
+  lineChart("cWait", "Wait for a downloaded file", "Time to fetch and verify a file nobody had cached", t, [
+    { name: "Typical (median)", color: "--series-1", values: samples.map(x => x.p50) },
+    { name: "Slow (95th percentile)", color: "--series-2", values: samples.map(x => x.p95) }], v => v >= 1000 ? (v / 1000).toFixed(1) + " s" : Math.round(v) + " ms");
+  columnChart("cFreed", "Space freed", `Moved off the disk, ${per}`, t.map(x => clock(x, range === "7d")), [
+    { name: "To keep the minimum free", color: "--series-1", values: samples.map(x => x.evicted) },
+    { name: "Unused for " + (s.tracking?.idleDays ?? 14) + " days", color: "--series-2", values: samples.map(x => x.idle) }], (v, axis) => bytes(v, axis ? 0 : 1),
+    i => clock(t[i], true), { bytes: true, empty: "Nothing moved off the disk in this period." });
+  const up = s.uploads || [];
+  columnChart("cUploads", "Backup uploads per day", "Bytes verified in the bucket, last 30 days", up.map(u => u.day.slice(5)), [
+    { name: "Uploaded", color: "--series-1", values: up.map(u => u.bytes) }], (v, axis) => bytes(v, axis ? 0 : 1), i => `${up[i].day} · ${compact(up[i].objects)} files`, { bytes: true });
+  mountChart("cMounts", s.mounts, s.mountsAt);
+  hotTable("cHot", s.hot, s.tracking);
+}
+
+async function load() {
+  try {
+    const [a, b] = await Promise.all([fetch("api/summary").then(r => r.json()), fetch("api/series?range=" + range).then(r => r.json())]);
+    summary = a; samples = b || [];
+    draw();
+  } catch (e) {
+    $("updated").textContent = "Cannot reach hfstore: retrying";
+  }
+}
+
+for (const b of document.querySelectorAll("#range button")) {
+  b.setAttribute("aria-pressed", String(b.dataset.r === range));
+  b.onclick = () => {
+    range = b.dataset.r; localStorage.setItem("hfstore-range", range);
+    for (const o of document.querySelectorAll("#range button")) o.setAttribute("aria-pressed", String(o === b));
+    load();
+  };
+}
+const saved = localStorage.getItem("hfstore-theme");
+if (saved) document.documentElement.dataset.theme = saved;
+$("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  document.documentElement.dataset.theme = dark ? "light" : "dark";
+  localStorage.setItem("hfstore-theme", document.documentElement.dataset.theme);
+  draw();
+};
+addEventListener("resize", () => draw());
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

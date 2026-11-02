@@ -77,6 +77,7 @@ func (p *prefetcher) hit(sha string) {
 	if p.fetched[sha] {
 		delete(p.fetched, sha)
 		p.stats.used++
+		p.v.stats.add(func(c *counters) { c.PrefetchUsed++ })
 	}
 	p.mu.Unlock()
 }

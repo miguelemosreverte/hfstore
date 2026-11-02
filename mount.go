@@ -28,6 +28,7 @@ type vfs struct {
 	flight *hydrations
 	pre    *prefetcher
 	uses   *useLog
+	stats  *metrics
 }
 
 type hydrations struct {
@@ -237,6 +238,7 @@ func (n *node) hydrate(ctx context.Context, path string) syscall.Errno {
 		return syscall.EIO
 	}
 	restoreMeta(real, entry)
+	n.v.stats.add(func(c *counters) { c.Hydrations++ })
 	return 0
 }
 
@@ -245,7 +247,9 @@ func (n *node) hydrate(ctx context.Context, path string) syscall.Errno {
 func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	path := n.logical("")
 	n.v.uses.touch(path, time.Now())
-	if remoteOnly(n.v.store.real(path)) {
+	if !remoteOnly(n.v.store.real(path)) {
+		n.v.stats.add(func(c *counters) { c.Opens++ })
+	} else {
 		if flags&syscall.O_ACCMODE == syscall.O_RDONLY && flags&syscall.O_TRUNC == 0 {
 			return n.openCached(ctx, path)
 		}
@@ -291,6 +295,7 @@ func (v *vfs) promote(path string, entry Entry, copy string) {
 	}
 	restoreMeta(real, entry)
 	os.Remove(copy)
+	v.stats.add(func(c *counters) { c.Promotions++ })
 	fmt.Println("promoted", path)
 }
 
@@ -305,6 +310,7 @@ func (v *vfs) cached(ctx context.Context, entry Entry, foreground bool) (string,
 		os.Chtimes(copy, now, now)
 		if foreground {
 			v.pre.hit(entry.SHA)
+			v.stats.add(func(c *counters) { c.CacheHits++ })
 		}
 		return copy, 0
 	}
@@ -324,10 +330,12 @@ func (v *vfs) cached(ctx context.Context, entry Entry, foreground bool) (string,
 	if err := os.MkdirAll(v.store.readCacheDir(), 0o700); err != nil {
 		return "", fs.ToErrno(err)
 	}
+	start := time.Now()
 	if err := v.store.Get(ctx, object, copy); err != nil {
 		fmt.Fprintln(os.Stderr, "read", entry.Path, err)
 		return "", syscall.EIO
 	}
+	v.stats.cold(object.Bytes, time.Since(start), !foreground)
 	return copy, 0
 }
 
@@ -433,13 +441,14 @@ func (s *Store) Serve(ctx context.Context) error {
 	lock := &sync.RWMutex{}
 	flight := &hydrations{paths: map[string]*sync.Mutex{}}
 	uses := loadUseLog(filepath.Join(s.cfg.StateDir, "usage.json"), time.Now())
-	pre := newPrefetcher(ctx, &vfs{store: s, mu: lock, flight: flight, uses: uses})
+	stats := loadMetrics(filepath.Join(s.cfg.StateDir, "metrics.jsonl"), time.Now())
+	pre := newPrefetcher(ctx, &vfs{store: s, mu: lock, flight: flight, uses: uses, stats: stats})
 	pre.v.pre = pre
 	timeout := time.Second
 	var servers []*fuse.Server
 	for _, mount := range s.cfg.Mounts {
 		syscall.Unmount(mount, syscall.MNT_DETACH) // a crashed daemon leaves a dead mount
-		v := &vfs{store: s, mount: mount, mu: lock, flight: flight, pre: pre, uses: uses}
+		v := &vfs{store: s, mount: mount, mu: lock, flight: flight, pre: pre, uses: uses, stats: stats}
 		real := s.real(mount)
 		var stat syscall.Stat_t
 		if err := syscall.Stat(real, &stat); err != nil {
@@ -465,6 +474,11 @@ func (s *Store) Serve(ctx context.Context) error {
 	defer tail.Stop()
 	defer reclaim.Stop()
 	defer uses.save(time.Now())
+	if s.cfg.UIAddr != "" {
+		go (&dashboard{store: s, mu: lock, uses: uses, stats: stats}).run(ctx)
+	}
+	minute := time.NewTicker(time.Minute)
+	defer minute.Stop()
 	var lastSweep time.Time
 	for {
 		select {
@@ -476,6 +490,11 @@ func (s *Store) Serve(ctx context.Context) error {
 			lock.Unlock()
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "tail:", err)
+			}
+		case now := <-minute.C:
+			free, _ := freeBytes(s.cfg.StateDir)
+			if err := stats.tick(now, free, dirBytes(s.readCacheDir())); err != nil {
+				fmt.Fprintln(os.Stderr, "metrics:", err)
 			}
 		case <-reclaim.C:
 			if line := pre.report(); line != "" {
@@ -495,6 +514,7 @@ func (s *Store) Serve(ctx context.Context) error {
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "reclaim:", err)
 				} else if freed > 0 {
+					stats.add(func(c *counters) { c.EvictedBytes += freed - idle; c.IdleBytes += idle })
 					fmt.Printf("reclaimed %s (%s idle)\n", human(freed), human(idle))
 				}
 			}
@@ -580,6 +600,17 @@ func openByDaemon() map[string]bool {
 		}
 	}
 	return open
+}
+
+func dirBytes(dir string) int64 {
+	var total int64
+	items, _ := os.ReadDir(dir)
+	for _, item := range items {
+		if info, err := item.Info(); err == nil {
+			total += info.Size()
+		}
+	}
+	return total
 }
 
 func (s *Store) readCacheDir() string { return filepath.Join(s.cfg.StateDir, "readcache") }

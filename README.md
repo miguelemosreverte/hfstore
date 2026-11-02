@@ -68,6 +68,16 @@ before the first idle move. A remote file used in three separate hours comes bac
 the disk from its cache copy, with no download, while there is room. Files the mount
 holds open are never removed. The kernel's atime is not used: the flush reads every
 file.
+## Dashboard
+
+`serve` also shows a dashboard at `uiAddr` (default `127.0.0.1:7650`; empty turns it
+off): disk free against the minimum, what is protected and what has moved off the
+disk, cache hit rate, read-ahead accuracy, download speed and wait, reads, space
+freed, backup uploads per day, each mounted folder split into on disk and remote,
+and the most used files. It samples once a minute into `metrics.jsonl` in the state
+directory and keeps seven days. Every chart has a table view. It reads only; bind it
+to localhost or a VPN address, not a public one.
+
 ## Setting up a machine
 
 Needs Linux, Go 1.24+, FUSE (`/dev/fuse`), root, and the `hf` CLI logged in
