@@ -74,6 +74,11 @@ Copy `/etc/pinpin-store/key` off the machine before anything else. To turn on th
 mount, add `rawRoot`, `mounts` and `keyIsOffMachine` to the config once the first
 flush has finished, then `systemctl enable --now hfstore-serve.service`.
 
+To check a new machine end to end, run `OWNER=your-hf-user scripts/selftest.sh` as
+root. It clones and builds hfstore, backs up a test folder to two new
+`hfstore-selftest-*` buckets, evicts it, reads it back through the mount, and restores
+it on a simulated second machine from the key alone.
+
 ## Compatibility with pinpin-store
 
 hfstore is pinpin-store under a new name, with the same behaviour and formats: it
