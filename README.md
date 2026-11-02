@@ -56,6 +56,18 @@ will see it, so exclude it.
 Uploads shell out to `hf` because bucket uploads use the Xet protocol, which has no
 Go client. Tests use a fake `hf` executable: `go test ./...`.
 
+
+### What stays on disk
+
+The daemon records every open through a mount (`usage.json` in the state directory):
+a score per file that grows by one per hour of use and halves every week. When space
+is needed, files go lowest score first. Every hour it also moves files nobody opened
+or modified for `idleDays` (14) off the disk, so free space grows past `keepFreeBytes`
+on its own; history starts when tracking does, so a new install waits `idleDays`
+before the first idle move. A remote file used in three separate hours comes back to
+the disk from its cache copy, with no download, while there is room. Files the mount
+holds open are never removed. The kernel's atime is not used: the flush reads every
+file.
 ## Setting up a machine
 
 Needs Linux, Go 1.24+, FUSE (`/dev/fuse`), root, and the `hf` CLI logged in

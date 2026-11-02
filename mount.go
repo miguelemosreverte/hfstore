@@ -27,6 +27,7 @@ type vfs struct {
 	mu     *sync.RWMutex
 	flight *hydrations
 	pre    *prefetcher
+	uses   *useLog
 }
 
 type hydrations struct {
@@ -243,6 +244,7 @@ func (n *node) hydrate(ctx context.Context, path string) syscall.Errno {
 // tree costs downloads but never puts files back on disk. Writes hydrate in place.
 func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	path := n.logical("")
+	n.v.uses.touch(path, time.Now())
 	if remoteOnly(n.v.store.real(path)) {
 		if flags&syscall.O_ACCMODE == syscall.O_RDONLY && flags&syscall.O_TRUNC == 0 {
 			return n.openCached(ctx, path)
@@ -267,7 +269,29 @@ func (n *node) openCached(ctx context.Context, path string) (fs.FileHandle, uint
 	if err != nil {
 		return nil, 0, fs.ToErrno(err)
 	}
+	n.v.promote(path, entry, copy)
 	return fs.NewLoopbackFile(fd), 0, 0
+}
+
+// promote puts a remote file that keeps being used back on the disk, by linking its
+// verified cache copy into place: no download. The cache name is then dropped, so a
+// later write to the file cannot change what the cache serves for that hash.
+func (v *vfs) promote(path string, entry Entry, copy string) {
+	if score, _ := v.uses.score(path, time.Now()); score < promoteScore {
+		return
+	}
+	if free, err := freeBytes(v.store.cfg.StateDir); err != nil || free-entry.Size < v.store.cfg.KeepFreeBytes+v.store.cfg.ReadCacheBytes {
+		return
+	}
+	unlock := v.flight.lock(path)
+	defer unlock()
+	real := v.store.real(path)
+	if !remoteOnly(real) || os.MkdirAll(filepath.Dir(real), 0o755) != nil || os.Link(copy, real) != nil {
+		return
+	}
+	restoreMeta(real, entry)
+	os.Remove(copy)
+	fmt.Println("promoted", path)
 }
 
 // cached returns a verified plaintext copy named by its hash, fetching it if needed.
@@ -408,13 +432,14 @@ func (s *Store) Serve(ctx context.Context) error {
 	}
 	lock := &sync.RWMutex{}
 	flight := &hydrations{paths: map[string]*sync.Mutex{}}
-	pre := newPrefetcher(ctx, &vfs{store: s, mu: lock, flight: flight})
+	uses := loadUseLog(filepath.Join(s.cfg.StateDir, "usage.json"), time.Now())
+	pre := newPrefetcher(ctx, &vfs{store: s, mu: lock, flight: flight, uses: uses})
 	pre.v.pre = pre
 	timeout := time.Second
 	var servers []*fuse.Server
 	for _, mount := range s.cfg.Mounts {
 		syscall.Unmount(mount, syscall.MNT_DETACH) // a crashed daemon leaves a dead mount
-		v := &vfs{store: s, mount: mount, mu: lock, flight: flight, pre: pre}
+		v := &vfs{store: s, mount: mount, mu: lock, flight: flight, pre: pre, uses: uses}
 		real := s.real(mount)
 		var stat syscall.Stat_t
 		if err := syscall.Stat(real, &stat); err != nil {
@@ -439,6 +464,8 @@ func (s *Store) Serve(ctx context.Context) error {
 	tail, reclaim := time.NewTicker(15*time.Second), time.NewTicker(5*time.Minute)
 	defer tail.Stop()
 	defer reclaim.Stop()
+	defer uses.save(time.Now())
+	var lastSweep time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -454,31 +481,47 @@ func (s *Store) Serve(ctx context.Context) error {
 			if line := pre.report(); line != "" {
 				fmt.Println(line)
 			}
+			if err := uses.save(time.Now()); err != nil {
+				fmt.Fprintln(os.Stderr, "usage:", err)
+			}
 			if s.cfg.KeyIsOffMachine {
+				sweep := time.Since(lastSweep) >= time.Hour
+				if sweep {
+					lastSweep = time.Now()
+				}
 				lock.RLock()
-				freed, err := s.Reclaim()
+				freed, idle, err := s.Reclaim(uses, time.Now(), sweep)
 				lock.RUnlock()
 				if err != nil {
 					fmt.Fprintln(os.Stderr, "reclaim:", err)
 				} else if freed > 0 {
-					fmt.Println("reclaimed", human(freed))
+					fmt.Printf("reclaimed %s (%s idle)\n", human(freed), human(idle))
 				}
 			}
 		}
 	}
 }
 
-// Reclaim evicts proven files, least recently read first, until KeepFreeBytes is
-// free. Open files are safe: their bytes live until the last descriptor closes.
-func (s *Store) Reclaim() (int64, error) {
+// Reclaim keeps KeepFreeBytes free and, on an idle sweep, also moves files off the
+// disk that nobody has opened or modified for IdleDays. Victims go least used first:
+// lowest usage score, then oldest last use. Idle time counts from when usage tracking
+// began, so a fresh install does not mistake no history for no use. Files the mount
+// has open are skipped: a writer would keep appending to a deleted file.
+func (s *Store) Reclaim(u *useLog, now time.Time, sweepIdle bool) (freed, idle int64, err error) {
 	free, err := freeBytes(s.cfg.StateDir)
-	if err != nil || free >= s.cfg.KeepFreeBytes {
-		return 0, err
+	if err != nil {
+		return 0, 0, err
 	}
+	sweepIdle = sweepIdle && s.cfg.IdleDays > 0
+	if free >= s.cfg.KeepFreeBytes && !sweepIdle {
+		return 0, 0, nil
+	}
+	idleBefore := now.Add(-time.Duration(s.cfg.IdleDays) * 24 * time.Hour).Unix()
 	type victim struct {
-		path  string
-		atime int64
-		size  int64
+		path       string
+		score      float64
+		last, size int64
+		idle       bool
 	}
 	var victims []victim
 	for _, mount := range s.cfg.Mounts {
@@ -487,30 +530,56 @@ func (s *Store) Reclaim() (int64, error) {
 			if !ok || !info.Mode().IsRegular() || !s.idx.current(entry) {
 				return nil
 			}
-			atime := info.Sys().(*syscall.Stat_t).Atim
-			victims = append(victims, victim{path, atime.Sec, info.Size()})
+			score, used := u.score(path, now)
+			last := max(info.ModTime().Unix(), used, u.Since)
+			victims = append(victims, victim{path, score, last, info.Size(), sweepIdle && last < idleBefore})
 			return nil
 		})
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 	}
-	sort.Slice(victims, func(a, b int) bool { return victims[a].atime < victims[b].atime })
-	var freed int64
+	sort.Slice(victims, func(a, b int) bool {
+		if victims[a].score != victims[b].score {
+			return victims[a].score < victims[b].score
+		}
+		return victims[a].last < victims[b].last
+	})
+	open := openByDaemon()
 	for _, item := range victims {
-		if free+freed >= s.cfg.KeepFreeBytes {
-			break
+		if free+freed >= s.cfg.KeepFreeBytes && !item.idle {
+			continue
 		}
 		real := s.real(item.path)
+		if open[real] {
+			continue
+		}
 		if sha, err := hashFile(real); err != nil || sha != s.idx.Entries[item.path].SHA {
 			continue
 		}
+		roomy := free+freed >= s.cfg.KeepFreeBytes
 		if err := os.Remove(real); err != nil {
-			return freed, err
+			return freed, idle, err
 		}
 		freed += item.size
+		if roomy {
+			idle += item.size
+		}
 	}
-	return freed, nil
+	return freed, idle, nil
+}
+
+// openByDaemon lists the real paths this process holds open, which is every file a
+// program has open through a mount.
+func openByDaemon() map[string]bool {
+	open := map[string]bool{}
+	fds, _ := os.ReadDir("/proc/self/fd")
+	for _, fd := range fds {
+		if target, err := os.Readlink("/proc/self/fd/" + fd.Name()); err == nil {
+			open[target] = true
+		}
+	}
+	return open
 }
 
 func (s *Store) readCacheDir() string { return filepath.Join(s.cfg.StateDir, "readcache") }
