@@ -1,0 +1,18 @@
+[Unit]
+Description=Encrypted machine backup to Hugging Face
+After=network-online.target
+StartLimitIntervalSec=1d
+StartLimitBurst=12
+
+[Service]
+Type=oneshot
+Environment=HOME=/root HF_HUB_DISABLE_PROGRESS_BARS=1 HF_XET_LOG_DEST=/dev/null
+ExecStart=/usr/local/bin/hfstore flush --apply
+Restart=on-failure
+RestartSec=2min
+Nice=19
+IOSchedulingClass=idle
+# On a small VPS the backup must lose any contest for memory.
+MemoryHigh=1G
+MemoryMax=1400M
+OOMScoreAdjust=800

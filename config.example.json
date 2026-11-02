@@ -1,0 +1,7 @@
+{
+  "publicBucket": "YOUR_USER/YOUR_MACHINE-blobs",
+  "privateBucket": "YOUR_USER/YOUR_MACHINE-vault",
+  "hf": "/usr/local/bin/hf",
+  "keyFile": "/etc/pinpin-store/key",
+  "stateDir": "/var/lib/pinpin-store"
+}

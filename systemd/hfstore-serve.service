@@ -1,0 +1,13 @@
+[Unit]
+Description=Mount Hugging Face backed trees for ordinary commands
+After=network-online.target
+
+[Service]
+Environment=HOME=/root HF_HUB_DISABLE_PROGRESS_BARS=1 HF_XET_LOG_DEST=/dev/null
+ExecStart=/usr/local/bin/hfstore serve
+Restart=always
+RestartSec=2
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
