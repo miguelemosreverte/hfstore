@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // HF shells out to the hf CLI: bucket uploads use the Xet protocol, which has no
@@ -108,26 +109,106 @@ func (h HF) fetch(ctx context.Context, remote, local string) error {
 	return err
 }
 
+// Downloads ask for the first rangeChunk bytes. A larger file comes back as 206 with
+// its total size, and the rest is fetched in parallel ranges from the CDN URL the
+// first request was redirected to: one stream from the CDN is several times slower.
+const (
+	rangeChunk   = 16 << 20
+	rangeWorkers = 8
+)
+
+// webClient keeps connections open for the prefetch workers and range fetches;
+// the default keeps two per host, so the rest would redo TLS every time.
+var webClient = func() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 64
+	return &http.Client{Transport: transport}
+}()
+
 func (h HF) fetchWeb(ctx context.Context, remote, local string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, h.web+"/buckets/"+h.bucket+"/resolve/"+remote, nil)
-	if err != nil {
-		return err
-	}
-	response, err := http.DefaultClient.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("fetch %s: %s", remote, response.Status)
-	}
 	file, err := os.Create(local)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
-	if _, err := io.Copy(file, response.Body); err != nil {
+	response, err := getRange(ctx, h.web+"/buckets/"+h.bucket+"/resolve/"+remote, 0, rangeChunk-1)
+	if err != nil {
 		return err
 	}
+	defer response.Body.Close()
+	switch response.StatusCode {
+	case http.StatusOK: // no range support: the whole file in one stream
+		if _, err := io.Copy(file, response.Body); err != nil {
+			return err
+		}
+		return file.Close()
+	case http.StatusPartialContent:
+	default:
+		return fmt.Errorf("fetch %s: %s", remote, response.Status)
+	}
+	var first, last, total int64
+	if _, err := fmt.Sscanf(response.Header.Get("Content-Range"), "bytes %d-%d/%d", &first, &last, &total); err != nil || first != 0 {
+		return fmt.Errorf("fetch %s: bad Content-Range %q", remote, response.Header.Get("Content-Range"))
+	}
+	if err := copyExactly(io.NewOffsetWriter(file, 0), response.Body, last+1); err != nil {
+		return err
+	}
+	if err := fetchRanges(ctx, response.Request.URL.String(), file, last+1, total); err != nil {
+		return fmt.Errorf("fetch %s: %w", remote, err)
+	}
 	return file.Close()
+}
+
+// fetchRanges fills [from, total) of file with parallel range requests.
+func fetchRanges(ctx context.Context, url string, file *os.File, from, total int64) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wait sync.WaitGroup
+	var once sync.Once
+	var failure error
+	slots := make(chan struct{}, rangeWorkers)
+	for start := from; start < total; start += rangeChunk {
+		end := min(start+rangeChunk, total) - 1
+		slots <- struct{}{}
+		if ctx.Err() != nil {
+			break
+		}
+		wait.Add(1)
+		go func() {
+			defer func() { <-slots; wait.Done() }()
+			err := func() error {
+				response, err := getRange(ctx, url, start, end)
+				if err != nil {
+					return err
+				}
+				defer response.Body.Close()
+				if response.StatusCode != http.StatusPartialContent {
+					return fmt.Errorf("range %d-%d: %s", start, end, response.Status)
+				}
+				return copyExactly(io.NewOffsetWriter(file, start), response.Body, end-start+1)
+			}()
+			if err != nil {
+				once.Do(func() { failure = err; cancel() })
+			}
+		}()
+	}
+	wait.Wait()
+	return failure
+}
+
+func getRange(ctx context.Context, url string, start, end int64) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
+	return webClient.Do(request)
+}
+
+func copyExactly(out io.Writer, in io.Reader, size int64) error {
+	n, err := io.Copy(out, io.LimitReader(in, size))
+	if err == nil && n != size {
+		err = fmt.Errorf("short read: %d of %d bytes", n, size)
+	}
+	return err
 }
